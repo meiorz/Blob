@@ -33,3 +33,15 @@ htmlcov/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Source datasets. Never committed: multi-GiB, and provenance lives in
+# data/metadata/catalog.json (source URL + SHA-256) instead of in the repo.
+# Resolved at runtime via COMPRESSION_BENCH_DATA_ROOT (default: this directory).
+data/raw/
+
+# Generated test scratch (leading underscore = regenerated on every run).
+# _fuzz_child.py is written from a template with an absolute host path baked in,
+# so a committed copy churns per machine and is stale by definition.
+# Preserved crash fixtures (tests/fixtures/fuzz_*.parquet) ARE evidence — keep those.
+tests/_fuzz_child.py
+tests/fixtures/_fuzz_case.parquet

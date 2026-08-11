@@ -19,17 +19,42 @@ RAW = os.path.join(ROOT, "results", "raw")
 
 DEFAULT_SCALES = {"S": 128 * 1048576, "M": 512 * 1048576, "L": 1536 * 1048576}
 
+# Source data is NOT in the repo (see .gitignore / docs/dataset-catalog.md). The catalog
+# records a filename + source URL; the directory holding it is host-specific and must not
+# be baked into a committed artifact. Earlier catalogs stored absolute sandbox paths,
+# which made the repo unrunnable anywhere but the machine that wrote it.
+DATA_ROOT = os.environ.get("COMPRESSION_BENCH_DATA_ROOT", os.path.join(ROOT, "data", "raw"))
+
 
 def load_catalog(path: str) -> dict:
     with open(path) as fh:
         return json.load(fh)
 
 
+def resolve_dataset_path(dataset: dict) -> str:
+    """Locate a catalog dataset on this host. Fails loudly rather than silently skipping."""
+    explicit = dataset.get("path")
+    if explicit and os.path.isabs(explicit) and os.path.exists(explicit):
+        return explicit
+    name = dataset.get("file") or (os.path.basename(explicit) if explicit else None)
+    if not name:
+        raise KeyError(f"catalog entry {dataset['id']} has neither 'file' nor 'path'")
+    candidate = os.path.join(DATA_ROOT, name)
+    if not os.path.exists(candidate):
+        raise FileNotFoundError(
+            f"{dataset['id']}: {name} not found under {DATA_ROOT}.\n"
+            f"  Acquire it from: {dataset.get('source', '(no source URL in catalog)')}\n"
+            f"  Then place it in {DATA_ROOT}, or set COMPRESSION_BENCH_DATA_ROOT to its directory.\n"
+            f"  See docs/dataset-catalog.md."
+        )
+    return candidate
+
+
 def run(dataset: dict, scale_label: str, scale_bytes: int, arm: str,
         trials: int, pin: int, timeout: int) -> dict | None:
     cfg = {
         "dataset_id": dataset["id"],
-        "source_path": dataset["path"],
+        "source_path": resolve_dataset_path(dataset),
         "dataset_sha256": dataset.get("sha256"),
         "columns": dataset.get("columns"),
         "projection": dataset["projection"],
@@ -88,6 +113,10 @@ def main() -> int:
                     help="skip cells already recorded in the current run manifest")
     args = ap.parse_args()
 
+    sys.path.insert(0, HERE)
+    from env_capture import banner
+    banner()
+
     catalog = load_catalog(args.catalog)
     wanted = set(filter(None, args.datasets.split(",")))
     datasets = [d for d in catalog["datasets"] if not wanted or d["id"] in wanted]
@@ -123,6 +152,13 @@ def main() -> int:
                 if name in done:
                     print(f"  skip (done) {name}")
                     continue
+                try:
+                    resolve_dataset_path(d)
+                except (FileNotFoundError, KeyError) as e:
+                    # Abort the sweep. Skipping the cell would leave a manifest that looks
+                    # complete-ish and invite a comparison across a missing arm.
+                    print(f"\nDATASET NOT AVAILABLE\n{e}", file=sys.stderr)
+                    return 2
                 if run(d, s, sb, arm, args.trials, args.pin, args.timeout) is None:
                     ok = False
                 else:

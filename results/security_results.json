@@ -3,7 +3,7 @@
     {
       "test": "zstd_bomb_output_cap",
       "pass": true,
-      "detail": "rejected on max_expansion_ratio in 5ms, RSS +0.0MiB (frame=32787B, true expansion=32749x)"
+      "detail": "rejected on max_expansion_ratio in 6ms, RSS +0.0MiB (frame=32787B, true expansion=32749x)"
     },
     {
       "test": "zstd_frame_content_size_not_trusted",

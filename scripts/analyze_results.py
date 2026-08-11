@@ -265,6 +265,22 @@ def main() -> int:
     if not cells:
         print(f"no raw results in {RAW}", file=sys.stderr)
         return 1
+
+    # Report the environment the CELLS were produced in, not this process's. Analysing
+    # sandbox results on real hardware must still say "sandbox".
+    classes = sorted({c["env"]["environment_class"] for c in cells.values()})
+    print(f"environment_class={','.join(classes)} "
+          f"hardware_validated={str(all(k not in ('sandbox',) for k in classes)).lower()}",
+          file=sys.stderr)
+    if "sandbox" in classes:
+        print("  WARNING: these cells are sandbox runs. Gate outcomes below are PROVISIONAL\n"
+              "  and cannot support a 'keep' decision. See docs/benchmark-methodology.md.",
+              file=sys.stderr)
+    if len(classes) > 1:
+        print(f"  ERROR: cells span multiple environment classes {classes}; SKILL.md forbids\n"
+              "  comparing results collected on different machines.", file=sys.stderr)
+        return 1
+
     rows = {k: summarize_cell(c) for k, c in cells.items()}
 
     # original_bytes is Arrow in-memory nbytes, so compression_ratio conflates

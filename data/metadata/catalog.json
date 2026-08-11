@@ -1,11 +1,13 @@
 {
   "_comment": "Iteration 1 datasets. PROXIES, not production data - see docs/dataset-catalog.md. Acquired 2026-08-10 via user-approved browser download.",
   "status": "acquired",
+  "_path_note": "Source Parquet files are NOT committed (see .gitignore). Each entry carries 'file' (basename) + 'source' (URL); orchestrate.py resolves it under COMPRESSION_BENCH_DATA_ROOT, default <repo>/data/raw. An earlier version stored absolute sandbox paths from the acquiring session, which made the repo unrunnable on any other host.",
+  "_sha256_note": "Corrected 2026-08-11. The digests below were previously recorded at 32 hex chars - a truncated PREFIX of the SHA-256, not MD5. Each 32-char prefix matches the corrected 64-char digest exactly, so dataset identity for run 20260811T072000Z-g5fix is confirmed, not invalidated. results/raw/*.json still carry the 32-char prefix; those files are append-only recorded evidence and were deliberately NOT rewritten.",
   "datasets": [
     {
       "id": "D1-clickbench-hits",
-      "path": "/sessions/nice-loving-pasteur/mnt/outputs/data_raw/hits_0.parquet",
-      "sha256": "fa134fe101e68324e0de851146fda696",
+      "file": "hits_0.parquet",
+      "sha256": "fa134fe101e68324e0de851146fda69624f5cbb707d387141d1c2a88a219a16d",
       "source": "https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_0.parquet",
       "role": "primary - wide analytics table with high-cardinality strings",
       "source_codec": "SNAPPY",
@@ -35,8 +37,8 @@
     },
     {
       "id": "D2-nyc-tlc-yellow",
-      "path": "/sessions/nice-loving-pasteur/mnt/outputs/data_raw/yellow_tripdata_2024-01.parquet",
-      "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9",
+      "file": "yellow_tripdata_2024-01.parquet",
+      "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510",
       "source": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet",
       "role": "contrast - narrow numeric/timestamp-dominant table",
       "source_codec": "ZSTD",

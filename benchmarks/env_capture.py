@@ -119,6 +119,23 @@ def capture() -> dict:
     return info
 
 
+def banner() -> None:
+    """Announce the environment class before any numbers are emitted.
+
+    Written to stderr, never stdout: analyze_results.py emits machine-readable JSON on
+    stdout and a banner there would corrupt it.
+    """
+    hardware_validated = ENVIRONMENT_CLASS not in ("sandbox",)
+    print(f"environment_class={ENVIRONMENT_CLASS} hardware_validated={str(hardware_validated).lower()}",
+          file=sys.stderr)
+    if not hardware_validated:
+        print("  WARNING: sandbox run. Results are PROVISIONAL and cannot support a 'keep'\n"
+              "  decision. Concurrency scaling, cold-cache behaviour and absolute per-worker\n"
+              "  memory budgets are NOT MEASURED here. Set COMPRESSION_BENCH_ENV=cloud-<shape>\n"
+              "  on real hardware. See docs/benchmark-methodology.md.",
+              file=sys.stderr)
+
+
 def sha256_file(path: str, chunk: int = 1 << 20) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      # Default to sandbox semantics; this is NOT hardware validation.
+      COMPRESSION_BENCH_ENV: sandbox
+      # CI should not allocate the 1 GiB decompression bomb buffer.
+      COMPRESSION_BENCH_SKIP_HEAVY: "1"
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Adjust if you have a requirements.txt or pyproject.toml
+          pip install pyarrow zstandard cramjam pytest
+
+      - name: Byte-compile Python sources
+        run: python -m compileall .
+
+      - name: Run test suites via pytest wrapper
+        run: |
+          # Wrapper runs correctness + security suites as subprocesses
+          pytest tests/test_suites.py

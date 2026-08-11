@@ -58,6 +58,26 @@ profiled runs, so sampler overhead cannot contaminate latency figures.
 analyzer reads only those. Globbing the directory would silently mix arms from different
 sweeps, which is precisely the invalid cross-run comparison SKILL.md prohibits.
 
+## Dataset provenance in a result row
+
+Two distinct fields, not one:
+
+- **`dataset_id`** — a human label (`D1-clickbench-hits`). Not a hash; not unique across
+  file revisions.
+- **`dataset_sha256`** — **SHA-256 of the on-disk Parquet file**, 64 lowercase hex chars.
+  This is the field that identifies *which bytes* were measured. `run_cell.py` takes it
+  from the catalog when present and otherwise computes it with `env_capture.sha256_file`.
+
+Source files are not committed; the catalog's `file` + `source` + `sha256` triple is the
+whole provenance chain, so a wrong or truncated digest breaks it.
+
+> **Known defect, corrected 2026-08-11.** Every cell in run `20260811T072000Z-g5fix` carries
+> a **32-char** `dataset_sha256` — a truncated prefix, because the hand-written catalog
+> supplied it and `run_cell.py` prefers a supplied value over recomputing. The catalog now
+> holds the full 64-char digests, and each old prefix matches, so the run's dataset identity
+> is confirmed. The raw cells were **not** rewritten: they are recorded evidence. Treat a
+> 32-char digest in `results/raw` as "pre-correction", not as a different algorithm.
+
 ## Memory profiling
 
 Process level: 5 ms sampler over `/proc/self/statm` with `/proc/self/smaps_rollup` every
