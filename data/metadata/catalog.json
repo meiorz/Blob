@@ -1,0 +1,64 @@
+{
+  "_comment": "Iteration 1 datasets. PROXIES, not production data - see docs/dataset-catalog.md. Acquired 2026-08-10 via user-approved browser download.",
+  "status": "acquired",
+  "datasets": [
+    {
+      "id": "D1-clickbench-hits",
+      "path": "/sessions/nice-loving-pasteur/mnt/outputs/data_raw/hits_0.parquet",
+      "sha256": "fa134fe101e68324e0de851146fda696",
+      "source": "https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_0.parquet",
+      "role": "primary - wide analytics table with high-cardinality strings",
+      "source_codec": "SNAPPY",
+      "projection_rationale": "Dashboard-shaped: time filter column + low-cardinality dimensions + two high-cardinality strings + numeric measures. 12 of 105 columns (11%), matching the P1 access pattern of projecting a subset.",
+      "projection": [
+        "EventTime",
+        "EventDate",
+        "CounterID",
+        "RegionID",
+        "OS",
+        "UserAgent",
+        "URL",
+        "Referer",
+        "ResolutionWidth",
+        "ResolutionHeight",
+        "IsMobile",
+        "UserID"
+      ],
+      "scale_bytes": {
+        "S": 100663296,
+        "M": 301989888,
+        "L": 452984832
+      },
+      "scale_note": "L reduced to 432 MiB: at 720 MiB the cell was killed on this 3.9 GiB host. Peak demand is ~3x the scale because integrity verification holds the source table AND its decoded roundtrip simultaneously, plus the Parquet buffer. L is host-RAM-capped, not partition-capped.",
+      "num_rows": 1000000,
+      "num_columns": 105
+    },
+    {
+      "id": "D2-nyc-tlc-yellow",
+      "path": "/sessions/nice-loving-pasteur/mnt/outputs/data_raw/yellow_tripdata_2024-01.parquet",
+      "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9",
+      "source": "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet",
+      "role": "contrast - narrow numeric/timestamp-dominant table",
+      "source_codec": "ZSTD",
+      "projection_rationale": "Time filter + location dimensions + fare measures. 7 of 19 columns.",
+      "projection": [
+        "tpep_pickup_datetime",
+        "PULocationID",
+        "DOLocationID",
+        "passenger_count",
+        "trip_distance",
+        "fare_amount",
+        "total_amount"
+      ],
+      "scale_bytes": {
+        "S": 67108864,
+        "M": 201326592,
+        "L": 335544320
+      },
+      "scale_note": "L reduced to 320 MiB for the same host-RAM reason as D1.",
+      "num_rows": 2964624,
+      "num_columns": 19
+    }
+  ],
+  "_field_note": "'columns' is RESERVED by orchestrate.py for an optional subset of columns to select before benchmarking. Descriptive counts use num_rows/num_columns. An earlier version stored the column COUNT under 'columns', which the orchestrator passed to Table.select() -- every cell failed with TypeError: 'int' object is not iterable."
+}

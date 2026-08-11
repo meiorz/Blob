@@ -1,0 +1,55 @@
+{
+  "results": [
+    {
+      "test": "edge_cases[none]",
+      "pass": true,
+      "detail": "9 cases all lossless"
+    },
+    {
+      "test": "edge_cases[snappy]",
+      "pass": true,
+      "detail": "9 cases all lossless"
+    },
+    {
+      "test": "edge_cases[zstd-3]",
+      "pass": true,
+      "detail": "9 cases all lossless"
+    },
+    {
+      "test": "edge_cases[gzip-6]",
+      "pass": true,
+      "detail": "9 cases all lossless"
+    },
+    {
+      "test": "determinism[none]",
+      "pass": true,
+      "detail": "byte-identical across repeated writes"
+    },
+    {
+      "test": "determinism[snappy]",
+      "pass": true,
+      "detail": "byte-identical across repeated writes"
+    },
+    {
+      "test": "determinism[zstd-3]",
+      "pass": true,
+      "detail": "byte-identical across repeated writes"
+    },
+    {
+      "test": "determinism[gzip-6]",
+      "pass": true,
+      "detail": "byte-identical across repeated writes"
+    },
+    {
+      "test": "cross_codec_value_identity",
+      "pass": true,
+      "detail": "all arms decode identically"
+    },
+    {
+      "test": "already_compressed_control",
+      "pass": true,
+      "detail": "gzip-6=0.9976x vs uncompressed; none=1.0000x vs uncompressed; snappy=1.0000x vs uncompressed; zstd-3=1.0000x vs uncompressed -- ratios ~1.0 confirm no gain is available on pre-compressed bytes"
+    }
+  ],
+  "all_pass": true
+}

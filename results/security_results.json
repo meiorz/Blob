@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "test": "zstd_bomb_output_cap",
+      "pass": true,
+      "detail": "rejected on max_expansion_ratio in 5ms, RSS +0.0MiB (frame=32787B, true expansion=32749x)"
+    },
+    {
+      "test": "zstd_frame_content_size_not_trusted",
+      "pass": true,
+      "detail": "declared=1024MiB, cap=16MiB, peak RSS growth=0.0MiB"
+    },
+    {
+      "test": "zstd_expansion_ratio_cap",
+      "pass": true,
+      "detail": "rejected on max_expansion_ratio"
+    },
+    {
+      "test": "zstd_max_compressed_input",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "test": "zstd_truncated_and_corrupt",
+      "pass": true,
+      "detail": "truncated_half:MalformedCompressedInput, truncated_header:MalformedCompressedInput, corrupt_magic:MalformedCompressedInput, empty:MalformedCompressedInput"
+    },
+    {
+      "test": "parquet_truncated_footer",
+      "pass": true,
+      "detail": "no_footer:ArrowInvalid, half:ArrowInvalid, one_byte:ArrowInvalid"
+    },
+    {
+      "test": "parquet_declared_size_cap",
+      "pass": true,
+      "detail": "rejected on max_output_bytes(declared_uncompressed) before decompressing any page"
+    },
+    {
+      "test": "parquet_mutation_fuzz",
+      "pass": true,
+      "detail": "120 cases -> {\"REJECTED\": 55, \"READ_OK\": 65}; no crashes/OOM/timeouts"
+    },
+    {
+      "test": "archive_limits_marked_not_applicable",
+      "pass": true,
+      "detail": "nested-archive depth / entry count / path traversal are NOT APPLICABLE to Parquet page codecs (workload P1); live for S1 if archives are ingested"
+    }
+  ],
+  "all_pass": true
+}
