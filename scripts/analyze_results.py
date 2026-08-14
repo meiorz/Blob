@@ -23,6 +23,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW = os.path.join(ROOT, "results", "raw")
 sys.path.insert(0, ROOT)
 from benchmarks.model_crossover import evaluate as bandwidth_evaluate  # noqa: E402
+from benchmarks.memory_profiler import memory_block_problems  # noqa: E402
+from benchmarks.env_capture import mixed_host_report  # noqa: E402
 
 MIB = 1048576
 BASELINE = "snappy"
@@ -206,20 +208,51 @@ def apply_gates(base: dict, cand: dict, growth: dict) -> dict:
         {"projected_compressed_bytes": bpf, "decode_projected_median_s": bt / 1000.0},
         {"projected_compressed_bytes": cpf, "decode_projected_median_s": ct / 1000.0})
     g["G3_bandwidth"] = {**bw, "pass": bw["gate_bandwidth_overall"]}
-    # G4 peak RSS
-    bp = base["mem_decode"]["peak_rss_bytes"]; cp = cand["mem_decode"]["peak_rss_bytes"]
-    dpct = 100.0 * (cp - bp) / bp if bp else 0.0
-    g["G4_peak_rss"] = {"delta_pct": dpct, "threshold_pct": G4_PEAK_RSS_PCT,
-                        "pass": dpct <= G4_PEAK_RSS_PCT}
-    # G5 post-run retention
-    m = cand["mem_decode"]
-    post_pct = 100.0 * (m["post_run_rss_bytes"] - m["baseline_rss_bytes"]) / m["baseline_rss_bytes"] \
-        if m["baseline_rss_bytes"] else 0.0
-    g["G5_post_run_retention"] = {"retained_pct_of_baseline": post_pct,
-                                  "threshold_pct": G5_POST_RUN_PCT,
-                                  "pass": post_pct <= G5_POST_RUN_PCT}
-    # G6 growth class
-    g["G6_growth_class"] = {**growth, "pass": growth.get("class") != "superlinear"}
+    # ---- G4/G5/G6: memory. UNEVALUABLE is not PASS. ------------------------
+    #
+    # All three read the sampler in memory_profiler.py. When it collects nothing
+    # (no Linux /proc on this host) every field is 0, and the arithmetic below
+    # silently manufactures a PASS:
+    #   G4  100*(0 - 0)/0 -> guarded to 0.0    -> 0.0 <= +10  -> PASS
+    #   G5  short-circuits to 0.0              -> 0.0 <=  +5  -> PASS
+    #   G6  no usable scales -> "insufficient_scales" != "superlinear" -> PASS
+    # Three memory gates green on a host that measured no memory. Missing data
+    # fails the gate; it never satisfies it. The predicate is imported from
+    # benchmarks/memory_profiler.py so the writer and this reader agree on what
+    # "measured" means.
+    mem_problems = (
+        [f"baseline({base['arm']}) {p}" for p in memory_block_problems(base["mem_decode"])]
+        + [f"candidate({cand['arm']}) {p}" for p in memory_block_problems(cand["mem_decode"])]
+    )
+    if mem_problems:
+        reason = ("memory was not measured for these cells, so this gate cannot be "
+                  "evaluated: " + "; ".join(mem_problems))
+        for name in ("G4_peak_rss", "G5_post_run_retention", "G6_growth_class"):
+            g[name] = {"pass": False, "unevaluable": True, "reason": reason}
+    else:
+        # G4 peak RSS
+        bp = base["mem_decode"]["peak_rss_bytes"]; cp = cand["mem_decode"]["peak_rss_bytes"]
+        dpct = 100.0 * (cp - bp) / bp
+        g["G4_peak_rss"] = {"delta_pct": dpct, "threshold_pct": G4_PEAK_RSS_PCT,
+                            "pass": dpct <= G4_PEAK_RSS_PCT}
+        # G5 post-run retention
+        m = cand["mem_decode"]
+        post_pct = 100.0 * (m["post_run_rss_bytes"] - m["baseline_rss_bytes"]) \
+            / m["baseline_rss_bytes"]
+        g["G5_post_run_retention"] = {"retained_pct_of_baseline": post_pct,
+                                      "threshold_pct": G5_POST_RUN_PCT,
+                                      "pass": post_pct <= G5_POST_RUN_PCT}
+        # G6 growth class. A classification that could not be fitted is also
+        # unevaluable -- "not superlinear" must mean "measured and not
+        # superlinear", not "we could not tell".
+        cls = growth.get("class")
+        if cls in (None, "insufficient_scales", "undetermined"):
+            g["G6_growth_class"] = {
+                **growth, "pass": False, "unevaluable": True,
+                "reason": f"growth class is {cls!r}: not enough usable scales to fit a "
+                          "slope, so superlinear growth cannot be excluded"}
+        else:
+            g["G6_growth_class"] = {**growth, "pass": cls != "superlinear"}
     # G7 integrity
     g["G7_integrity"] = {"pass": bool(cand["integrity_lossless"])}
     # G8 reproducibility.
@@ -256,7 +289,12 @@ def apply_gates(base: dict, cand: dict, growth: dict) -> dict:
         "note": "footprint is deterministic (single build) so it needs no repeat test; "
                 "this gate governs the latency conclusion only",
     }
-    g["ALL_PASS"] = all(v.get("pass") for k, v in g.items() if k.startswith("G"))
+    gate_items = [(k, v) for k, v in g.items() if k.startswith("G")]
+    g["ALL_PASS"] = all(v.get("pass") for _, v in gate_items)
+    # Reported separately from failures so a reader can tell "we measured this and
+    # it regressed" from "we never measured this". Both block a keep; only one is
+    # fixed by changing the codec.
+    g["UNEVALUABLE"] = sorted(k for k, v in gate_items if v.get("unevaluable"))
     return g
 
 
@@ -279,6 +317,15 @@ def main() -> int:
     if len(classes) > 1:
         print(f"  ERROR: cells span multiple environment classes {classes}; SKILL.md forbids\n"
               "  comparing results collected on different machines.", file=sys.stderr)
+        return 1
+
+    # environment_class agreeing is necessary but NOT sufficient: it defaults to
+    # "sandbox" whenever COMPRESSION_BENCH_ENV is unset, so two genuinely
+    # different machines pass the check above. Compare the machine itself.
+    mixed = mixed_host_report({f"{ds}|{sc}|{arm}": c.get("env")
+                               for (ds, sc, arm), c in cells.items()})
+    if mixed:
+        print("  ERROR: " + mixed.replace("\n", "\n  "), file=sys.stderr)
         return 1
 
     rows = {k: summarize_cell(c) for k, c in cells.items()}
@@ -322,8 +369,19 @@ def main() -> int:
         json.dump(out, fh, indent=2)
     print(json.dumps({"cells": len(rows), "gated_comparisons": len(gates)}, indent=2))
     for name, g in gates.items():
-        failed = [k for k, v in g.items() if k.startswith("G") and not v.get("pass")]
-        print(f"{name}: {'ALL GATES PASS' if g['ALL_PASS'] else 'FAIL -> ' + ','.join(failed)}")
+        uneval = g.get("UNEVALUABLE") or []
+        failed = [k for k, v in g.items()
+                  if k.startswith("G") and not v.get("pass") and k not in uneval]
+        if g["ALL_PASS"]:
+            verdict = "ALL GATES PASS"
+        else:
+            parts = []
+            if failed:
+                parts.append("FAIL -> " + ",".join(failed))
+            if uneval:
+                parts.append("UNEVALUABLE -> " + ",".join(uneval))
+            verdict = "  ".join(parts)
+        print(f"{name}: {verdict}")
     return 0
 
 

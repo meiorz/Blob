@@ -77,6 +77,22 @@ def run(dataset: dict, scale_label: str, scale_bytes: int, arm: str,
         return None
     res = json.loads(proc.stdout)
     res["cell_wall_s"] = dt
+
+    # Second gate on the same rule run_cell.py applies, deliberately duplicated:
+    # results/raw is append-only, so a cell written with unmeasured memory cannot
+    # be withdrawn. The cost of checking twice is nothing; the cost of recording
+    # a zero that passes G4/G5/G6 is a permanent false PASS in the evidence tree.
+    from memory_profiler import cell_memory_problems
+    problems = cell_memory_problems(res)
+    if problems:
+        print(f"  !! {dataset['id']}/{scale_label}/{arm} NOT RECORDED -- memory unmeasured:",
+              file=sys.stderr)
+        for p in problems:
+            print(f"       {p}", file=sys.stderr)
+        print("     Process-level sampling is Linux-only (/proc); see "
+              "benchmarks/memory_profiler.py.", file=sys.stderr)
+        return None
+
     os.makedirs(RAW, exist_ok=True)
     with open(os.path.join(RAW, f"{dataset['id']}__{scale_label}__{arm}.json"), "w") as fh:
         json.dump(res, fh)

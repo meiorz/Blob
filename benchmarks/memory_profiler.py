@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import gc
 import os
+import platform
+import sys
 import threading
 import time
 import tracemalloc
@@ -25,7 +27,20 @@ except ImportError:
     resource = None
 
 _SMAPS = "/proc/self/smaps_rollup"
+_STATM = "/proc/self/statm"
 _STATUS = "/proc/self/status"
+
+
+class MemoryProfilerUnavailable(RuntimeError):
+    """Process-level memory sampling cannot work on this host.
+
+    Raised instead of returning zeros. A zero peak RSS is indistinguishable from
+    a real measurement of nothing, and the decision gates read it as the latter:
+    G4 computes 100*(0-baseline)/baseline = -100% and PASSES, G5 short-circuits
+    to 0.0 and PASSES, G6 sees no usable scales and PASSES. Three memory gates
+    reported green on a host that measured no memory at all. Failing loudly at
+    the source is the only place this can be fixed once, for every consumer.
+    """
 
 
 def _page_size() -> int:
@@ -57,13 +72,49 @@ def _read_smaps_rollup() -> dict[str, int]:
     return out
 
 
-def _rss_now() -> int:
-    """Cheap RSS read via statm (pages)."""
+def _rss_now() -> int | None:
+    """Cheap RSS read via statm (pages). None means "could not read", NOT zero.
+
+    The distinction is the whole point: callers must be able to tell an
+    unreadable counter from a genuine measurement.
+    """
     try:
-        with open("/proc/self/statm", "rb") as fh:
+        with open(_STATM, "rb") as fh:
             return int(fh.read().split()[1]) * _page_size()
     except (OSError, IndexError, ValueError):
-        return 0
+        return None
+
+
+def process_sampling_support() -> tuple[bool, str]:
+    """Can this host sample process-level RSS? Returns (ok, reason_if_not).
+
+    Probed by actually reading the counter rather than by inspecting
+    sys.platform alone, so a Linux container with /proc masked is caught too.
+    """
+    if not os.path.exists(_STATM):
+        return False, (
+            f"{_STATM} does not exist on this host "
+            f"(platform={sys.platform!r}, {platform.platform()}). "
+            "Process-level memory sampling in benchmarks/memory_profiler.py is "
+            "implemented entirely against the Linux /proc filesystem: "
+            f"{_STATM} for RSS and {_SMAPS} for USS/PSS/anonymous. "
+            "There is no Windows or macOS implementation. Run the sweep on Linux, "
+            "or add a platform backend before collecting cells here."
+        )
+    if _rss_now() is None:
+        return False, (
+            f"{_STATM} exists but could not be read or parsed "
+            f"(platform={sys.platform!r}, {platform.platform()}). "
+            "Process-level memory sampling cannot proceed."
+        )
+    return True, ""
+
+
+def require_process_sampling() -> None:
+    """Fail closed before a benchmark starts, not silently after it finishes."""
+    ok, reason = process_sampling_support()
+    if not ok:
+        raise MemoryProfilerUnavailable(reason)
 
 
 @dataclass
@@ -123,7 +174,7 @@ class MemorySampler:
         i = 0
         while not self._stop.is_set():
             rss = _rss_now()
-            if rss:
+            if rss is not None:
                 self.peak_rss = max(self.peak_rss, rss)
                 self.sum_rss += rss
                 self.n += 1
@@ -162,9 +213,18 @@ class profile_memory:
         self.metrics = MemoryMetrics()
 
     def __enter__(self) -> "profile_memory":
+        # Fail BEFORE the operation runs. Discovering the host cannot measure
+        # memory after a multi-minute cell has completed wastes the run and
+        # tempts a "just record what we have" patch, which is how the zeros got
+        # into results/raw in the first place.
+        require_process_sampling()
         gc.collect()
         self._gc0 = sum(s["collections"] for s in gc.get_stats())
-        self.metrics.baseline_rss_bytes = _rss_now()
+        baseline = _rss_now()
+        if baseline is None:
+            raise MemoryProfilerUnavailable(
+                f"baseline RSS read from {_STATM} failed at profiler entry")
+        self.metrics.baseline_rss_bytes = baseline
         try:
             import pyarrow as pa
             self._pool = pa.default_memory_pool()
@@ -214,7 +274,8 @@ class profile_memory:
         # the arena conflates normal allocator behaviour with a genuine leak,
         # so record BOTH: pre-release (what the OS sees while the pool is warm)
         # and post-release (what is actually unreclaimable).
-        m.post_run_rss_before_release_bytes = _rss_now()
+        before_release = _rss_now()
+        m.post_run_rss_before_release_bytes = before_release or 0
         m.memory_pool_backend = ""
         if self._pool is not None:
             try:
@@ -226,11 +287,64 @@ class profile_memory:
                 time.sleep(0.05)
             except Exception:
                 pass
-        m.post_run_rss_bytes = _rss_now()
+        post_run = _rss_now()
+        m.post_run_rss_bytes = post_run or 0
         m.arena_retained_bytes = max(
             m.post_run_rss_before_release_bytes - m.post_run_rss_bytes, 0)
         m.post_run_retained_bytes = m.post_run_rss_bytes - m.baseline_rss_bytes
+
+        # Only raise when the block itself succeeded: replacing a real exception
+        # with this one would hide the actual failure.
+        if exc[0] is None:
+            if m.sample_count == 0:
+                raise MemoryProfilerUnavailable(
+                    f"the sampler collected 0 samples over {self.interval_s * 1000:.0f} ms "
+                    f"ticks: every read of {_STATM} failed. peak_rss_bytes would be 0, "
+                    "which the decision gates cannot distinguish from a measurement.")
+            if before_release is None or post_run is None:
+                raise MemoryProfilerUnavailable(
+                    f"post-run RSS read from {_STATM} failed; retention (G5) would be "
+                    "computed from a zero that means 'unmeasured'.")
+            if m.peak_rss_bytes <= 0:
+                raise MemoryProfilerUnavailable(
+                    f"peak RSS is {m.peak_rss_bytes} after {m.sample_count} sample(s); "
+                    "refusing to report a zero peak as a measurement.")
         return False
+
+
+# Phases a benchmark cell records; both must be real measurements for the memory
+# gates to mean anything.
+CELL_MEMORY_PHASES = ("memory_encode", "memory_decode")
+
+
+def memory_block_problems(block: dict | None) -> list[str]:
+    """Why a recorded memory_* block is not a usable measurement. Empty == usable.
+
+    ONE definition, shared by the writer (run_cell/orchestrate refuse to record
+    such a cell) and the reader (analyze_results marks G4/G5/G6 UNEVALUABLE).
+    Two separate notions of "measured" at the two ends is how a cell that could
+    not be written in the first place still ends up passing a gate.
+    """
+    if not isinstance(block, dict):
+        return ["memory block missing entirely"]
+    problems: list[str] = []
+    if not block.get("sample_count"):
+        problems.append(f"sample_count={block.get('sample_count')!r} (no samples collected)")
+    if not block.get("peak_rss_bytes"):
+        problems.append(f"peak_rss_bytes={block.get('peak_rss_bytes')!r} "
+                        "(zero peak is 'unmeasured', not a measurement)")
+    if not block.get("baseline_rss_bytes"):
+        problems.append(f"baseline_rss_bytes={block.get('baseline_rss_bytes')!r} "
+                        "(G5 divides by this)")
+    return problems
+
+
+def cell_memory_problems(cell: dict) -> list[str]:
+    """Same check across every phase of a whole cell, labelled by phase."""
+    out: list[str] = []
+    for phase in CELL_MEMORY_PHASES:
+        out += [f"{phase}: {p}" for p in memory_block_problems(cell.get(phase))]
+    return out
 
 
 def derived_memory_metrics(m: MemoryMetrics, original_bytes: int, compressed_bytes: int) -> dict:

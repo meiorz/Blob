@@ -1,5 +1,8 @@
 # Iteration log
 
+Append-only narrative, newest entries appended at the end. A reusable pre-flight checklist
+and blank entry for a real-hardware run is at the bottom of this file.
+
 ## Iteration 1: Parquet page codec SNAPPY -> ZSTD-3 (COMPLETE — provisional, compat-blocked)
 
 - **Date:** 2026-08-11
@@ -160,3 +163,78 @@
    which scale points were dropped and the reason.
 4. Post-run retention conflated Arrow arena behaviour with a leak. Retention is now measured
    before and after `release_unused()`.
+
+---
+
+# Reusable checklist — real-hardware run
+
+Copy the two blocks below into a new entry at the end of this file, one entry per run. The
+procedure they enforce is in `docs/benchmark-methodology.md` § *Real-hardware rerun*; which
+runs to perform is in `docs/ROADMAP.md`. This is a form to fill in, not a plan.
+
+## Pre-flight
+
+Tick every line **before** starting the sweep. Each one is cheap now and expensive after a
+multi-hour run.
+
+```txt
+[ ] COMPRESSION_BENCH_ENV exported, and echoed back to confirm the exact string.
+    Anything other than "sandbox" sets hardware_validated=true, including a typo.
+[ ] COMPRESSION_BENCH_DATA_ROOT points at the datasets; sha256sum matches catalog.json
+    for every file that will be read.
+[ ] COMPRESSION_BENCH_SKIP_HEAVY is UNSET (`env | grep COMPRESSION_BENCH_`).
+[ ] `python3 benchmarks/env_capture.py` reviewed: environment_class, host fingerprint,
+    process_memory_sampling_available, and the NOT-MEASURED register as this node reports it.
+[ ] scale_bytes decision made: raised for this node, or deliberately left. If raised,
+    catalog.json + dataset-catalog.md updated in the same commit as the run.
+[ ] A --run-id chosen. Without one the summary of the previous run is overwritten.
+[ ] Correctness and hostile-input suites run and green on THIS node, before the sweep.
+```
+
+## Post-run
+
+```txt
+[ ] `python3 scripts/verify_run_integrity.py` passes for the new manifest.
+[ ] results/summary.json archived to results/summary_<run-id>.json.
+[ ] Any NOT-MEASURED entry that disappeared on this node is named below, with whether the
+    quantity is now measured or merely no longer reported.
+[ ] Entry below completed. Decision left to a human.
+```
+
+## Entry template
+
+SKILL.md's `docs/iteration-log.md` format, with the fields a hardware run must additionally
+pin down. Do not delete a field — record "n/a" and why.
+
+```md
+## Iteration <N>: <short title> (<environment_class>)
+
+- **Date:**
+- **Environment:** `<environment_class>`; host: <os>, <cpu_model>, <physical cores>,
+  <MemTotal>. hardware_validated=<value as recorded in the cells>.
+  worker_shape_attested=<true|false>.
+- **NOT-MEASURED register on this node:** <entries recorded>. Retired since the previous
+  run: <entries>, of which <these> are genuinely measured now and <these> are merely no
+  longer reported (harness still does not vary them).
+- **Run id:** `<run-id>`, <n>/<n> cells, <trials> trials. Manifest:
+  `results/manifest_<run-id>.json`. Summary: `results/summary_<run-id>.json`.
+- **Hypothesis:**
+- **Dataset:** <ids>, sha256 <prefixes>. scale_bytes: <values> — <unchanged from run X |
+  raised from Y, which makes these cells non-comparable to that run's>.
+- **Baseline:**
+- **Change:** <what differs from the run this is compared against — environment, dataset,
+  or configuration. Name exactly one where possible.>
+- **Command(s) run:**
+- **Results:**
+- **Correctness result:**
+- **Security result:** <COMPRESSION_BENCH_SKIP_HEAVY was unset; suite fully executed.>
+- **Memory baseline:**
+- **Memory candidate:**
+- **Peak RSS delta:**
+- **Post-run retained memory:**
+- **Growth classification:**
+- **Run integrity:** `verify_run_integrity.py` <pass|fail + which checks>.
+- **Decision:** keep / revise / reject
+- **Reason:**
+- **Next hypothesis:**
+```

@@ -63,6 +63,22 @@ def main() -> int:
         "pinned_cpu": pin,
         "env": capture(),
     })
+
+    # Refuse to emit a cell whose memory was never measured. profile_memory
+    # already raises on an unsupported host, so reaching here with zeros means
+    # something bypassed it -- and a cell carrying zeros passes G4/G5/G6 by
+    # arithmetic accident. SKILL.md makes memory profiling mandatory for every
+    # benchmark; a cell without it is not a valid cell.
+    from memory_profiler import cell_memory_problems
+    problems = cell_memory_problems(result)
+    if problems:
+        raise RuntimeError(
+            "refusing to emit a cell with unmeasured memory "
+            f"({cfg['dataset_id']}/{cfg['scale_label']}/{cfg['arm']}):\n  "
+            + "\n  ".join(problems)
+            + "\nSee benchmarks/memory_profiler.py: process-level sampling is "
+              "Linux-only (/proc). Run the sweep on Linux or add a backend.")
+
     json.dump(result, sys.stdout)
     return 0
 

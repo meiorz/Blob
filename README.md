@@ -61,6 +61,7 @@ mkdir -p data/raw && sha256sum data/raw/*.parquet    # must match the catalog
 python3 tests/test_hostile_inputs.py                        # security suite
 python3 tests/test_correctness.py                           # correctness suite
 python3 scripts/probe_reader_support.py --write /tmp/compat # compatibility probes
+python3 scripts/render_compat_matrix.py                     # compat JSON -> docs table
 python3 benchmarks/orchestrate.py --catalog data/metadata/catalog.json --trials 10
 python3 scripts/analyze_results.py
 ```
@@ -72,6 +73,39 @@ asserts their exit codes. The suites report pass/fail via exit code and JSON, no
 
 Set `COMPRESSION_BENCH_ENV=cloud-<shape>` when running on real hardware. It defaults to
 `sandbox`, and results carry that label so they can never be misread as validated.
+
+### Reader-compatibility probes — quickstart
+
+Full runbook: `docs/compatibility-matrix.md` § *How to populate*. The short version:
+
+```bash
+python3 scripts/probe_reader_support.py --write /tmp/compat        # 1. generate
+# 2. copy /tmp/compat to each engine (verify with sha256sum on both ends)
+python3 scripts/probe_reader_support.py --read /tmp/compat \       # 3. check
+    --json /tmp/compat/result-<engine>.json \
+    --engine <engine> --engine-version <version>
+# 4. record verdicts + exact error text in data/metadata/compat_matrix.json
+python3 scripts/render_compat_matrix.py                            # 5. re-render
+python3 scripts/render_compat_matrix.py --check                    # 6. verify
+```
+
+`--read` drives pyarrow. For Spark, Trino, Hive or a vendor reader, run the four SQL
+statements printed by `--help` by hand, once per probe file, and record all four outcomes.
+Capture the exact error text on any failure — it is what distinguishes an unsupported codec
+from an unsupported page version.
+
+### Real-hardware runs
+
+Full runbook: `docs/benchmark-methodology.md` § *Real-hardware rerun*, with a copyable
+per-run checklist in `docs/iteration-log.md`.
+
+### When a run goes wrong
+
+`python3 scripts/verify_run_integrity.py` answers whether a recorded run is a coherent
+population before anything is concluded from it. Recovery procedure —
+quarantine, superseding a manifest, recording the incident — is in `docs/architecture.md`
+§ *Damaged evidence*. `results/raw` is append-only: damaged cells are never edited or
+deleted.
 
 ## Ground rules
 

@@ -62,47 +62,121 @@ and I will populate the matrix below and lift the gate.
 
 ## How to populate
 
-`scripts/probe_reader_support.py --help` is the self-contained operator reference: it documents
-both modes, the four criteria, the exact SQL to run by hand on engines pyarrow cannot drive, and
-the exit codes. Nothing below requires reading the rest of this repo.
+Operator runbook. Executable start to finish with a checkout, a Python with pyarrow, and
+access to the engines. `scripts/probe_reader_support.py --help` is the self-contained tool
+reference: both modes, the four criteria, the exact SQL for engines pyarrow cannot drive,
+and the exit codes.
 
-**1. Generate the probes** (once, anywhere with pyarrow):
+Probe matrix: {none, snappy, zstd-3, gzip-6} × Parquet writer version {1.0, 2.6}.
+Writer version is included because it constrains future iterations independently of the
+codec — V2 data pages unlock DELTA_BINARY_PACKED and BYTE_STREAM_SPLIT.
+
+### Step 1 — Generate the probes
+
+Once, anywhere with pyarrow. The output is a few MiB, so it is cheap to copy anywhere.
 
 ```bash
 python3 scripts/probe_reader_support.py --write /tmp/compat
 ```
 
-**2. Verify each pyarrow-based reader.** This runs all four criteria on all 8 files:
+Produces `probe_{none,snappy,zstd,gzip}_{v10,v26}.parquet` plus `expected.json`.
+`expected.json` lists every file, the arm it represents, and the expected values — so an
+operator on an engine this script cannot drive can read the targets straight out of it
+without a checkout.
+
+### Step 2 — Move the probes to each engine
+
+Copy the whole `/tmp/compat` directory to somewhere each engine can read: a shared mount, an
+object-store prefix, a scratch HDFS path. Keep the filenames — the arm each file represents
+is encoded in its name, and the ingest step in Step 4 is keyed on it.
+
+Verify the copy before trusting a verdict. A truncated upload reads as a codec failure:
+
+```bash
+sha256sum /tmp/compat/*.parquet          # compare on both ends
+```
+
+### Step 3 — Run the checks
+
+**Engines pyarrow can drive**, one invocation per engine:
 
 ```bash
 python3 scripts/probe_reader_support.py --read /tmp/compat \
-    --json /tmp/compat/result-pyarrow.json --engine pyarrow --engine-version 25.0.1
+    --json /tmp/compat/result-pyarrow.json \
+    --engine pyarrow --engine-version 25.0.1
 ```
 
-Exit status is `0` only if every file passed all four checks; `1` if any check failed;
-`2` on a usage error or a directory that is not a probe directory. `--engine` /
-`--engine-version` are recorded in the JSON and default to `null` — fill them in, because a
-verdict with no engine version attached cannot be audited later.
+Exit `0` only if every file passed all four checks; `1` if any check failed; `2` on a usage
+error or a directory that is not a probe directory. Always pass `--engine` and
+`--engine-version`: they default to `null`, and a verdict with no engine version attached
+cannot be audited later. `--read` also prints a ready-made Markdown row.
 
-`--json` emits one entry per `<codec>|<page_version>` arm:
+**Engines pyarrow cannot drive** — Spark, Trino, Hive, a vendor reader. Register each
+`.parquet` as a table and run the four statements from `--help` against it, once per file.
+Record all four outcomes separately: criteria 1–2 read the footer only, 3–4 decompress real
+data pages, and the difference is what separates "cannot parse the file" from "parses the
+metadata then cannot decompress the pages".
+
+**Capture the exact error text on every failure.** "Doesn't work" is not actionable; the
+error text is what distinguishes an unsupported codec from an unsupported page version from
+a dictionary-page problem.
+
+### Step 4 — Ingest into `data/metadata/compat_matrix.json`
+
+The JSON is the source of truth; the Results table is rendered from it. Edit the engine's
+entry — never the rendered block.
+
+For each arm you tested, append to that engine's `checks` array and set `version`:
 
 ```json
-{"engine": "pyarrow", "engine_version": "25.0.1",
- "probes": {"zstd|1.0": {"pass": true,
-                         "checks": {"row_count": true, "schema": true,
-                                    "filter_agg": true, "string_page": true},
-                         "error": null}}}
+{"codec": "zstd-3", "page_version": "v1.0", "pass": false,
+ "checks": {"row_count": true, "schema": true,
+            "filter_agg": false, "string_page": false},
+ "error": "java.lang.UnsupportedOperationException: Unsupported codec ZSTD"}
 ```
 
-**3. Verify every other reader in the estate.** Copy `/tmp/compat` to Spark/parquet-mr, the
-warehouse engine serving dashboards, DuckDB, Hive and any legacy reader, then run the four
-SQL statements from `--help` against each file. `--read` also prints a ready-made Markdown row
-for the Results table below; paste the exact error text of any failure into its Notes column.
+Then set the `codec_support` / `page_support` summary flags **only where the measured
+results agree**. `true` = every tested combination passed, `false` = every one failed. Where
+they are mixed, leave the flag `null` and let `checks` carry the detail: a boolean cannot
+express PARTIAL, and the renderer refuses a summary flag that contradicts `checks`.
 
-Probe matrix: {none, snappy, zstd-3, gzip-6} × Parquet writer version {1.0, 2.6}.
-Writer version is included because it constrains future iterations independently of the
-codec — V2 data pages unlock DELTA_BINARY_PACKED and BYTE_STREAM_SPLIT, which are the
-natural Iteration 3+ candidates.
+Write `true`/`false` only for outcomes you actually observed.
+
+### When an engine cannot be exercised at all
+
+Three different situations, three different records. The one thing that is never acceptable
+is a silently blank row.
+
+| Situation | What to record |
+| --- | --- |
+| The engine ran and a check failed | `pass: false` in `checks` with the **exact** error text, and `false` in the summary flag if every arm failed. This is a real FAIL and it is the finding, not a gap. |
+| The engine ran but rejected the file outright (cannot open, unknown codec) | Same as above. Refusing to open a probe *is* a compatibility failure — record it as `false`, not as untested. |
+| The engine could not be reached or stood up at all (no cluster access, licence, no environment) | Leave the flags `null` — `null` means "not tested" and that is honest — **but** add the blocker to that engine's `unsupported_reasons` array so the reason renders into the Notes column. Never leave both the flags and the notes empty. |
+
+The third row is the one that needs discipline. `null` with an empty note is
+indistinguishable from nobody having looked, which is exactly the state this gate exists to
+detect. Writing `false` instead would be worse: it renders as FAIL and asserts a codec
+verdict that was never observed. `compat_matrix.json`'s own notes make that explicit —
+never write `false` to mean "unknown". Record the blocker, keep the `null`, and the gate
+stays closed for the right reason.
+
+Do not infer one engine's verdict from another's, and do not infer a version's verdict from
+a neighbouring version. The "Known support floors" section below is a starting point for an
+audit, not evidence.
+
+### Step 5 — Re-render and verify
+
+```bash
+python3 scripts/render_compat_matrix.py          # JSON -> the generated block below
+python3 scripts/render_compat_matrix.py --check  # exits 1 if the doc is out of date
+```
+
+`--check` is what CI runs. It validates the JSON as well as the rendering: a summary flag
+that contradicts `checks`, or an uninterpretable support value, fails here rather than
+silently rendering a cell the evidence does not support.
+
+Re-run the full ingest → render → check loop for every engine. The gate line at the top of
+the generated block recomputes itself from the JSON.
 
 ## Results
 
