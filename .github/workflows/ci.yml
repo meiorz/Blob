@@ -1,0 +1,97 @@
+name: CI
+
+# Scope: correctness, security, and provenance invariants only.
+# CI never runs benchmarks. A GitHub runner is a noisy shared VM and any timing
+# number produced here would violate SKILL.md's measurement rules. CI's job is to
+# prove the harness still works and that the repo's own guard rails hold.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Explicit, not inherited. CI is never hardware validation -- the guard step
+      # below fails the build if this ever silently becomes something else.
+      COMPRESSION_BENCH_ENV: sandbox
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # pyarrow is pinned to the version recorded as PASS in
+          # docs/compatibility-matrix.md. Floating it would mean CI exercises a
+          # reader that no row in that matrix covers.
+          pip install "pyarrow==25.0.1" zstandard cramjam pytest
+
+      - name: Byte-compile Python sources
+        run: python -m compileall -q benchmarks scripts security tests
+
+      - name: Guard - CI must never claim hardware validation
+        run: |
+          python - <<'PY'
+          import sys; sys.path.insert(0, "benchmarks")
+          from envcapture import ENVIRONMENT_CLASS
+          assert ENVIRONMENT_CLASS == "sandbox", f"unexpected environment_class={ENVIRONMENT_CLASS}"
+          print("environment_class=sandbox, hardware_validated=false -- as required")
+          PY
+
+      - name: Guard - no host-specific absolute paths in committed files
+        run: |
+          # The D1 defect class: an acquiring host's absolute path baked into a
+          # committed artifact makes the repo unrunnable elsewhere. results/raw is
+          # exempt: those are append-only recorded evidence, not inputs.
+          if git grep -n -- "/sessions/" -- . ':!results/raw' ':!docs/dataset-catalog.md' ':!.github'; then
+            echo "::error::host-specific absolute path found in a committed file"
+            exit 1
+          fi
+          echo "no host-specific absolute paths"
+
+      - name: Guard - dataset provenance is a full SHA-256
+        run: |
+          python - <<'PY'
+          import json, re, sys
+          cat = json.load(open("data/metadata/catalog.json"))
+          bad = [d["id"] for d in cat["datasets"]
+                 if not re.fullmatch(r"[0-9a-f]{64}", d.get("sha256", ""))]
+          if bad:
+              sys.exit(f"catalog sha256 is not 64 lowercase hex chars for: {bad}")
+          missing = [d["id"] for d in cat["datasets"] if not d.get("file") or not d.get("source")]
+          if missing:
+              sys.exit(f"catalog entry missing 'file' or 'source' for: {missing}")
+          print(f"{len(cat['datasets'])} catalog entries: full SHA-256 + file + source URL")
+          PY
+
+      - name: Guard - compatibility matrix doc matches its JSON source of truth
+        # compat_matrix.json is the source of truth; the Results table in
+        # docs/compatibility-matrix.md is rendered from it. Without this check the
+        # two drift silently, and the document that gates codec adoption would
+        # show a PASS the JSON does not support. --check also validates the JSON
+        # itself: contradictory summaries and uninterpretable flags fail here.
+        run: |
+          python3 scripts/render_compat_matrix.py --check
+
+      - name: Run correctness and security suites
+        # Both suites run. COMPRESSION_BENCH_SKIP_HEAVY is deliberately NOT set:
+        # it skips the ENTIRE hostile-input suite (all 9 tests), not just the bomb
+        # case, and the repo cites "security 9/9" as evidence in three documents.
+        # ubuntu-latest standard runners are 4 vCPU / 16 GiB, so the 1 GiB buffer
+        # the bomb test allocates is not a constraint.
+        run: pytest tests/ -q -rs

@@ -197,8 +197,13 @@ if resource is not None:
     if setrlimit is not None and rlimit_as is not None:
         setrlimit(rlimit_as, (%(mem)d, %(mem)d))
 
-sys.path.insert(0, str(Path(%(security)r).resolve()))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Derived from this file's location, never interpolated from the generating host:
+# tests/_fuzz_child.py is TRACKED, so baking an absolute path in here rewrites a
+# committed file with a machine-specific one on every run, and CI guard 2 then
+# fails on whichever host last ran the suite.
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "security"))
+sys.path.insert(0, str(ROOT))
 from security.safe_decompress import safe_parquet_open, DecompressionLimits
 data = open(sys.argv[1], "rb").read()
 try:
@@ -223,9 +228,12 @@ def test_parquet_mutation_fuzz(n_cases: int = 120, seed: int = 20260810) -> None
     rng = random.Random(seed)
     os.makedirs(FIXTURES, exist_ok=True)
     child = os.path.join(ROOT, "tests", "_fuzz_child.py")
-    with open(child, "w") as fh:
-        fh.write(FUZZ_CHILD % {"mem": 512 * 1024 * 1024,
-                               "security": os.path.join(ROOT, "security")})
+    # newline="\n" pins LF on every host. Without it Python translates to the
+    # platform ending, so this TRACKED file is rewritten CRLF on Windows and LF on
+    # Linux -- a whole-file diff on every cross-OS run, and `git diff --check`
+    # reports each CR as trailing whitespace.
+    with open(child, "w", newline="\n") as fh:
+        fh.write(FUZZ_CHILD % {"mem": 512 * 1024 * 1024})
     outcomes: dict[str, int] = {}
     bad: list[str] = []
     for i in range(n_cases):
