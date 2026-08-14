@@ -48,7 +48,7 @@ jobs:
         run: |
           python - <<'PY'
           import sys; sys.path.insert(0, "benchmarks")
-          from envcapture import ENVIRONMENT_CLASS
+          from env_capture import ENVIRONMENT_CLASS
           assert ENVIRONMENT_CLASS == "sandbox", f"unexpected environment_class={ENVIRONMENT_CLASS}"
           print("environment_class=sandbox, hardware_validated=false -- as required")
           PY
